@@ -1,0 +1,13 @@
+node_modules/
+dist/
+apks/
+*.log
+.DS_Store
+public/vendor/
+.playwright-cli/
+
+.env*
+!.env.example
+public/musiccenter-config.json
+supabase/.temp/
+supabase/.branches/

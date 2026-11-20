@@ -1,0 +1,26 @@
+feature,area,priority,original,clone,notes
+Consultar planos por data,planejamento,must,yes,yes,S01 • R01/R03
+Criar e editar planos,planejamento,must,yes,yes,S02 • R01 • Dados sincronizados no Supabase
+Adicionar e ordenar músicas do plano,planejamento,must,yes,yes,S02/S04 • R04
+Incluir momentos sem música no roteiro,planejamento,should,yes,yes,S02 • R01 • Item compartilhado com descrição
+Registrar nome e função na escala,equipe,must,yes,yes,S03 • R01/R05 • O administrador registra os integrantes no painel ou no aplicativo
+Registrar confirmação ou recusa,equipe,must,yes,yes,S03 • R01/R05 • O administrador registra a resposta na escala online compartilhada
+Buscar músicas pelo título,repertório,must,yes,yes,S04 • R03
+Manter letras e cifras do próprio repertório,repertório,must,yes,yes,S05 • R03/R07
+Ler músicas seguindo a ordem do plano,estante,must,yes,yes,S02/S06 • R03
+Consultar um PDF da música,estante,must,yes,yes,S06/S08 • R03
+Marcar o andamento com metrônomo,ensaio,must,yes,yes,S07 • R06
+Reabrir o material para tocar sem internet,estante,must,yes,no,S06 • A versão online atual exige sessão e conexão para reabrir o acervo
+Transpor cifras de texto,estante,should,yes,yes,S06 • R07 • PDF importado tem tonalidade fixa
+Registrar anotações pessoais,estante,should,yes,yes,S06 • Notas privadas associadas à conta e à música no espaço
+Virar páginas com pedal físico,estante,could,yes,no,S06 • R02/R03 • Compatibilidade depende de ensaio em aparelho • As setas e PageUp/PageDown foram testadas por teclado
+Reproduzir áudio de ensaio,ensaio,could,yes,no,S06 • R01/R07
+Sincronizar páginas entre aparelhos,estante,could,yes,no,S06 • R07/R08 • Exige uma sessão compartilhada
+Enviar convites e respostas pela rede,equipe,could,yes,no,S03 • R01/R05 • Exige identidade e serviço compartilhado
+Importar catálogos comerciais licenciados,integrações,could,yes,skip,R08 • Acordos com provedores de partituras
+Acessar organizações e contas Planning Center,integrações,could,yes,skip,R01/R08 • Dados e assinaturas de terceiros
+Compartilhar plano com partituras por arquivo,intercâmbio,should,no,yes,"Formato próprio do MusicCenter para levar roteiro, escala e material a outro aparelho"
+Cadastro e login obrigatório,conta,must,yes,yes,Supabase Auth por e-mail e senha em web e mobile
+Administrar espaço e integrantes no navegador,gestão,must,yes,yes,Convites revogáveis e associação autenticada
+Sincronizar planos e repertório entre aparelhos,colaboração,must,yes,yes,Revisão condicional e atualização automática com Supabase
+Acessar PDFs privados da equipe,estante,must,yes,yes,Storage com políticas por espaço e login
