@@ -1,0 +1,13 @@
+{
+  "name": "@musiccenter/backend",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:online": "node tests/online.mjs",
+    "supabase": "supabase"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.119.2"
+  }
+}

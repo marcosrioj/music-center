@@ -1,0 +1,25 @@
+{
+  "name": "@musiccenter/mobile",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "npm run build --workspace @musiccenter/web && cap sync",
+    "android": "npm run sync && cap open android",
+    "ios": "npm run sync && cap open ios",
+    "apk": "npm run sync && node scripts/build-apk.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "8.6.2",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/ios": "8.6.2",
+    "@capacitor/preferences": "^8.0.0",
+    "@capacitor/share": "^8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2",
+    "typescript": "~5.9.3"
+  }
+}
