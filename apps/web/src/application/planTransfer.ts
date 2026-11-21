@@ -1,9 +1,5 @@
-import { Capacitor } from '@capacitor/core'
-import { Directory, Filesystem } from '@capacitor/filesystem'
-import { Share } from '@capacitor/share'
-import type { Member, Plan, Song } from '../../domain/workspace'
-import { currentScope } from '../../data/supabase'
-import { readScore, removeScores, storeScore } from '../../data/scores'
+import type { Member, Plan, Song } from '../domain/workspace'
+import type { ScoreFiles } from './scoreFiles'
 
 const format = 'musiccenter.plan'
 const MiB = 1024 * 1024
@@ -107,69 +103,19 @@ function fileName(value: unknown) {
   return text(value, 1024).split(/[\\/]/).pop()?.trim() || 'Partitura.pdf'
 }
 
-function newId() {
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-    byte.toString(16).padStart(2, '0')
-  ).join('')
+type ExportPorts = {
+  scores: Pick<ScoreFiles, 'read'>
+  base64: (blob: Blob) => Promise<string>
+  sendFile: (blob: Blob, name: string, title: string) => Promise<void>
 }
 
-function base64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () =>
-      reject(new Error('Não foi possível ler o arquivo no dispositivo.'))
-    reader.onload = () => {
-      const uri = String(reader.result)
-      resolve(uri.slice(uri.indexOf(',') + 1))
-    }
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function sendFile(blob: Blob, name: string, title: string) {
-  if (!Capacitor.isNativePlatform()) {
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
-    return
-  }
-
-  const destination = { directory: Directory.Cache, path: newId() + '-' + name }
-  try {
-    // Transfer bounded chunks across the WebView bridge on memory-limited devices.
-    const chunkSize = 512 * 1024
-    let uri = ''
-    for (let start = 0; start < blob.size; start += chunkSize) {
-      const data = await base64(blob.slice(start, start + chunkSize))
-      if (start === 0)
-        uri = (await Filesystem.writeFile({ ...destination, data })).uri
-      else await Filesystem.appendFile({ ...destination, data })
-    }
-    await Share.share({
-      files: [uri],
-      title,
-      dialogTitle: 'Compartilhar plano',
-    })
-    // Android recipients can read after the sheet closes. The OS manages this cache.
-  } catch (error) {
-    await Filesystem.deleteFile(destination).catch(() => undefined)
-    if (error instanceof Error && /cancel/i.test(error.message))
-      throw new Error('Compartilhamento cancelado.')
-    throw new Error(
-      'Não foi possível compartilhar o arquivo. Verifique o espaço disponível.'
-    )
-  }
-}
-
-export async function sharePlan(plan: Plan, songs: Song[]): Promise<void> {
+export async function sharePlan(
+  plan: Plan,
+  songs: Song[],
+  ports: ExportPorts
+): Promise<void> {
   if (plan.items.length > maxRows || plan.team.length > maxRows)
     throw new Error('O plano excede o limite de 1.000 itens ou integrantes.')
-  const scope = currentScope()
   const linked = [
     ...new Set(
       plan.items.flatMap((item) => (item.songId ? [item.songId] : []))
@@ -198,7 +144,7 @@ export async function sharePlan(plan: Plan, songs: Song[]): Promise<void> {
     if (song.pdfId) {
       let data: ArrayBuffer
       try {
-        data = await readScore(song.pdfId, scope)
+        data = await ports.scores.read(song.pdfId)
       } catch {
         throw new Error(
           'Não foi possível ler o PDF da música “' + song.title + '”.'
@@ -210,7 +156,7 @@ export async function sharePlan(plan: Plan, songs: Song[]): Promise<void> {
       if (used > maxFile) throw new Error(fileLimit)
       packed.pdf = {
         name: fileName(song.pdfName || 'Partitura.pdf'),
-        data: await base64(new Blob([data])),
+        data: await ports.base64(new Blob([data])),
       }
     }
     packedSongs.push(packed)
@@ -233,7 +179,11 @@ export async function sharePlan(plan: Plan, songs: Song[]): Promise<void> {
     .replace(/[^a-zA-Z0-9-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 60)
-  await sendFile(blob, (slug || 'plano') + '.musiccenter.json', plan.title)
+  await ports.sendFile(
+    blob,
+    (slug || 'plano') + '.musiccenter.json',
+    plan.title
+  )
 }
 
 function scoreData(value: unknown): Score {
@@ -256,9 +206,10 @@ function toFile(pdf: Score) {
 }
 
 export async function importPlan(
-  file: File
+  file: File,
+  scores: Pick<ScoreFiles, 'store' | 'remove'>,
+  newId: () => string
 ): Promise<{ plan: Plan; songs: Song[] }> {
-  const scope = currentScope()
   if (file.size > maxFile) throw new Error(fileLimit)
   let raw: Record<string, unknown>
   try {
@@ -311,11 +262,11 @@ export async function importPlan(
   const saved: string[] = []
   try {
     for (const [id, pdf] of pdfs) {
-      await storeScore(toFile(pdf), id, scope)
+      await scores.store(toFile(pdf), id)
       saved.push(id)
     }
   } catch {
-    await removeScores(saved, scope).catch(() => undefined)
+    await scores.remove(saved).catch(() => undefined)
     throw new Error(
       'Falha ao importar as partituras. Verifique os PDFs e o espaço disponível.'
     )

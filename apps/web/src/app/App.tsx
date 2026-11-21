@@ -1,38 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { User } from '@supabase/supabase-js'
-import { Capacitor } from '@capacitor/core'
-import { App as NativeApp } from '@capacitor/app'
+import type { Account, AccountSession } from '../application/session'
+import type { WorkspaceServices } from '../application/workspaces'
+import type { DeviceNavigation } from '../application/deviceNavigation'
+import type { RepertoireServices } from '../features/repertoire/services'
+import type { Notes, Scope, Snapshot, Space } from '../domain/space'
 import { Shell, Logo } from './Shell'
 import { Access } from '../features/account/Access'
 import { SpacePicker } from '../features/account/SpacePicker'
-import {
-  client,
-  db,
-  humanError,
-  activateScores,
-  fetchSnapshot,
-  readNotes,
-  rpc,
-  webUrl,
-  projectUrl,
-  type Notes,
-  type Scope,
-  type Snapshot,
-  type Space,
-} from '../data/supabase'
-import { legacyWorkspace, migrateLocal } from '../data/legacyWorkspace'
 
-const pendingKey = 'mc.invite.' + projectUrl
-const recoveryKey = 'mc.recovering.' + projectUrl
-const nativeCallback = 'app.musiccenter.mobile://auth/callback'
-function collectInvite() {
-  const token = /^#\/convite\/([0-9a-f]{64})\/?$/i.exec(location.hash)?.[1]
-  if (token) {
-    sessionStorage.setItem(pendingKey, token)
-    history.replaceState(null, '', location.pathname + location.search)
-  }
-  return sessionStorage.getItem(pendingKey) || ''
-}
 function Screen({
   message,
   action,
@@ -57,11 +32,21 @@ function Screen({
 type Opened = { scope: Scope; snapshot: Snapshot; notes: Notes }
 function Teams({
   user,
+  session,
+  workspaces,
+  navigation,
+  repertoireFor,
+  webUrl,
   invite,
   onJoined,
   leave,
 }: {
-  user: User
+  user: Account
+  session: AccountSession
+  workspaces: WorkspaceServices
+  navigation: DeviceNavigation
+  repertoireFor: (scope: Scope) => RepertoireServices
+  webUrl: string
   invite: string
   onJoined: () => void
   leave: () => void
@@ -75,7 +60,8 @@ function Teams({
   const request = useRef(0)
   useEffect(() => {
     mounted.current = true
-    void legacyWorkspace()
+    void workspaces
+      .legacyWorkspace()
       .then((data) => {
         if (mounted.current) setLegacy(!!data)
       })
@@ -83,24 +69,25 @@ function Teams({
     return () => {
       mounted.current = false
       request.current++
-      activateScores(undefined)
+      workspaces.activateScores()
     }
-  }, [])
+  }, [workspaces])
   const reset = useCallback(() => {
     request.current++
-    activateScores(undefined)
+    workspaces.activateScores()
     setOpened(undefined)
     setSpaces(null)
     history.replaceState(null, '', location.pathname)
     setAttempt((n) => n + 1)
-  }, [])
+  }, [workspaces])
   const deny = useCallback(() => {
     reset()
     setMessage('Seu acesso a este espaço mudou. Escolha um espaço disponível.')
   }, [reset])
   useEffect(() => {
     let active = true
-    rpc<Space[]>('mc_list_spaces')
+    workspaces
+      .list()
       .then((list) => {
         if (active) setSpaces(list)
       })
@@ -110,7 +97,7 @@ function Teams({
     return () => {
       active = false
     }
-  }, [attempt])
+  }, [attempt, workspaces])
   useEffect(() => {
     if (invite) reset()
   }, [invite, reset])
@@ -119,19 +106,17 @@ function Teams({
     const current = ++request.current
     const scope = { space, userId: user.id }
     const snapshot = bringLocal
-      ? await migrateLocal(scope)
-      : await fetchSnapshot(space)
-    const notes = await readNotes(scope)
+      ? await workspaces.migrateLocal(scope)
+      : await workspaces.fetchSnapshot(space)
+    const notes = await workspaces.readNotes(scope)
     if (!mounted.current || request.current !== current) return
-    activateScores(scope)
+    workspaces.activateScores(scope)
     history.replaceState(null, '', location.pathname + '#/inicio')
     setMessage('')
     setOpened({ scope, snapshot, notes })
   }
   async function create(name: string, bringLocal: boolean) {
-    const newSpace = await rpc<Space>('mc_create_space', {
-      p_name: name.trim(),
-    })
+    const newSpace = await workspaces.create(name.trim())
     setSpaces((prev) => [...(prev || []), newSpace])
     try {
       await openSpace(newSpace, bringLocal)
@@ -145,7 +130,7 @@ function Teams({
     }
   }
   async function join(token: string) {
-    const next = await rpc<Space>('mc_join_space', { p_token: token })
+    const next = await workspaces.join(token)
     setSpaces((old) => [...(old || []).filter((s) => s.id !== next.id), next])
     onJoined()
     await openSpace(next)
@@ -154,6 +139,10 @@ function Teams({
     return (
       <Shell
         key={user.id + opened.scope.space.id}
+        services={workspaces}
+        navigation={navigation}
+        repertoireFor={repertoireFor}
+        webUrl={webUrl}
         initial={opened.snapshot}
         scope={opened.scope}
         personalNotes={opened.notes}
@@ -202,13 +191,7 @@ function Teams({
         legacyAvailable={legacy}
         inviteToken={invite}
         onDeleteAccount={async () => {
-          const { error } = await db().functions.invoke('delete-account', {
-            body: {},
-          })
-          if (error)
-            throw new Error(
-              'Não foi possível excluir a conta. Tente novamente com uma sessão válida.'
-            )
+          await session.deleteAccount()
           leave()
         }}
       />
@@ -216,147 +199,62 @@ function Teams({
   )
 }
 
-export function OnlineApp() {
-  const [user, setUser] = useState<User | null>(null)
-  const [ready, setReady] = useState(!client)
-  const [invite, setInvite] = useState(collectInvite)
-  const [recoveryUser, setRecoveryUser] = useState(() =>
-    sessionStorage.getItem(recoveryKey)
-  )
-  const recover = !!user && recoveryUser === user.id
+type OnlineAppProps = {
+  session: AccountSession
+  workspaces: WorkspaceServices
+  navigation: DeviceNavigation
+  repertoireFor: (scope: Scope) => RepertoireServices
+  webUrl: string
+}
+
+export function OnlineApp({
+  session,
+  workspaces,
+  navigation,
+  repertoireFor,
+  webUrl,
+}: OnlineAppProps) {
+  const [user, setUser] = useState<Account | null>(null)
+  const [ready, setReady] = useState(!session.configured)
+  const [invite, setInvite] = useState(session.readInvite)
+  const [recoveryUser, setRecoveryUser] = useState<string | null>(null)
   const [checkingLink, setCheckingLink] = useState(false)
-  const recoverySession = useCallback((id: string | null) => {
-    if (id) sessionStorage.setItem(recoveryKey, id)
-    else sessionStorage.removeItem(recoveryKey)
-    setRecoveryUser(id)
-  }, [])
   const [warning, setWarning] = useState('')
+  const recover = !!user && recoveryUser === user.id
   useEffect(() => {
-    if (!client) return
-    const auth = client.auth
-    const { data } = auth.onAuthStateChange((event, session) => {
-      const current =
-        session?.user && !session.user.is_anonymous ? session.user : null
-      if (event === 'PASSWORD_RECOVERY' && current) recoverySession(current.id)
-      else if (
-        !current ||
-        (sessionStorage.getItem(recoveryKey) &&
-          sessionStorage.getItem(recoveryKey) !== current.id)
-      ) {
-        recoverySession(null)
-      }
-      if (!current) activateScores(undefined)
-      setUser(current)
-      setReady(true)
+    const stopInvite = session.watchInvite(setInvite)
+    const stopSession = session.observe({
+      changed(current, recovery) {
+        if (!current) workspaces.activateScores()
+        setRecoveryUser(recovery)
+        setUser(current)
+        setReady(true)
+      },
+      checking: setCheckingLink,
+      linkWarning: setWarning,
     })
-    const onHash = () => setInvite(collectInvite())
-    window.addEventListener('hashchange', onHash)
-    let stopped = false
-    let cleanup: (() => void) | undefined
-    const handled = new Set<string>()
-    const native = Capacitor.isNativePlatform()
-    const process = async (raw: string) => {
-      if (stopped || handled.has(raw)) return
-      const url = new URL(raw)
-      if (
-        native &&
-        (url.protocol !== 'app.musiccenter.mobile:' ||
-          url.host !== 'auth' ||
-          url.pathname !== '/callback')
-      )
-        return
-      const code = url.searchParams.get('code')
-      const linkError =
-        url.searchParams.has('error') ||
-        new URLSearchParams(url.hash.slice(1)).has('error')
-      if (!code && !linkError) return
-      handled.add(raw)
-      setCheckingLink(true)
-      try {
-        if (linkError || !code) throw new Error()
-        const { data: exchanged, error } = await auth.exchangeCodeForSession(
-          code,
-          {
-            flowId: url.searchParams.get('sb_flow_id') || undefined,
-          }
-        )
-        if (stopped) return
-        if (error || !exchanged.user || exchanged.user.is_anonymous)
-          throw new Error()
-        if ('redirectType' in exchanged) {
-          recoverySession(
-            exchanged.redirectType === 'recovery' ? exchanged.user.id : null
-          )
-        }
-        setUser(exchanged.user)
-        setWarning('')
-      } catch {
-        if (!stopped)
-          setWarning(
-            'O link expirou ou foi aberto em outro aparelho. Solicite outro link neste navegador ou aplicativo.'
-          )
-      } finally {
-        if (!native && !stopped) {
-          for (const key of [
-            'code',
-            'sb_flow_id',
-            'error',
-            'error_code',
-            'error_description',
-          ])
-            url.searchParams.delete(key)
-          if (linkError) url.hash = ''
-          history.replaceState(
-            history.state,
-            '',
-            url.pathname + url.search + url.hash
-          )
-        }
-        if (!stopped) setCheckingLink(false)
-      }
-    }
-    if (native) {
-      void NativeApp.addListener('appUrlOpen', (x) => void process(x.url)).then(
-        (handle) => {
-          if (stopped) void handle.remove()
-          else
-            cleanup = () => {
-              void handle.remove()
-            }
-        }
-      )
-      void NativeApp.getLaunchUrl().then((r) => {
-        if (r) void process(r.url)
-      })
-    } else {
-      void process(window.location.href)
-    }
     return () => {
-      stopped = true
-      cleanup?.()
-      data.subscription.unsubscribe()
-      window.removeEventListener('hashchange', onHash)
+      stopSession()
+      stopInvite()
     }
-  }, [recoverySession])
-  const callback = Capacitor.isNativePlatform()
-    ? nativeCallback
-    : webUrl || location.origin
+  }, [session, workspaces])
+
   const leave = () => {
-    void db()
-      .auth.signOut({ scope: 'local' })
-      .then(({ error }) => {
-        if (error) {
-          setWarning(
-            'Não foi possível sair. Confira a conexão e tente novamente.'
-          )
-          return
-        }
-        activateScores(undefined)
-        recoverySession(null)
+    void session
+      .signOut()
+      .then(() => {
+        workspaces.activateScores()
+        setRecoveryUser(null)
         setUser(null)
         history.replaceState(null, '', location.pathname)
       })
+      .catch(() =>
+        setWarning(
+          'Não foi possível sair. Confira a conexão e tente novamente.'
+        )
+      )
   }
+
   if (!ready || checkingLink)
     return <Screen message="Verificando sua sessão…" />
   const warnings = warning && (
@@ -372,9 +270,14 @@ export function OnlineApp() {
         <Teams
           key={user.id}
           user={user}
+          session={session}
+          workspaces={workspaces}
+          navigation={navigation}
+          repertoireFor={repertoireFor}
+          webUrl={webUrl}
           invite={invite}
           onJoined={() => {
-            sessionStorage.removeItem(pendingKey)
+            session.clearInvite()
             setInvite('')
           }}
           leave={leave}
@@ -390,36 +293,19 @@ export function OnlineApp() {
         </button>
       )}
       <Access
-        configured={!!client}
+        configured={session.configured}
         inviteToken={invite}
-        onRecovery={recover && !!user}
-        onLogin={async (email, password) => {
-          const { error } = await db().auth.signInWithPassword({
-            email,
-            password,
-          })
-          if (error) throw humanError(error)
-        }}
+        onRecovery={recover}
+        onLogin={session.signIn}
         onRegister={async (email, password) => {
-          const { data, error } = await db().auth.signUp({
-            email,
-            password,
-            options: { emailRedirectTo: callback },
-          })
-          if (error) throw humanError(error)
-          if (!data.session)
+          const { needsConfirmation } = await session.signUp(email, password)
+          if (needsConfirmation)
             return 'Confira seu e-mail para confirmar o cadastro. Depois entre no MusicCenter.'
         }}
-        onResetPassword={async (email) => {
-          const { error } = await db().auth.resetPasswordForEmail(email, {
-            redirectTo: callback,
-          })
-          if (error) throw humanError(error)
-        }}
+        onResetPassword={session.resetPassword}
         onUpdatePassword={async (password) => {
-          const { error } = await db().auth.updateUser({ password })
-          if (error) throw humanError(error)
-          recoverySession(null)
+          await session.changePassword(password)
+          setRecoveryUser(null)
         }}
       />
     </>

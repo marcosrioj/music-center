@@ -11,7 +11,7 @@ import {
   Trash2,
   UsersRound,
 } from 'lucide-react'
-import type { Membership, Space } from '../../data/supabase'
+import type { Membership, Space } from '../../domain/space'
 import { Feedback } from './AccountUI'
 import { useAction } from './useAction'
 

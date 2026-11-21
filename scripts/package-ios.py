@@ -79,10 +79,10 @@ def package():
         "apps/web/package.json", "apps/web/vite.config.ts", "apps/web/tsconfig.json",
         "apps/web/index.html", "apps/mobile/package.json", "apps/mobile/capacitor.config.ts",
         "backend/package.json", "backend/supabase/config.toml", "backend/tests/online.mjs",
-        "scripts/package-ios.py", "scripts/package-web.py",
+        "scripts/package-ios.py", "scripts/package-web.py", "scripts/check-architecture.mjs",
     )}
     for folder in (
-        WEB / "src", WEB / "scripts", WEB / "public", MOBILE / "scripts", IOS,
+        WEB / "src", WEB / "tests", ROOT / "backend/tests", WEB / "scripts", WEB / "public", MOBILE / "scripts", IOS,
         ROOT / "docs", ROOT / "backend/supabase/migrations",
         ROOT / "backend/supabase/functions", ROOT / "backend/supabase/tests",
     ):

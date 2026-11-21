@@ -1,12 +1,8 @@
+import { WorkspaceError } from '../application/errors'
 import { createClient } from '@supabase/supabase-js'
 import { Capacitor } from '@capacitor/core'
 import { Preferences } from '@capacitor/preferences'
-import type { Workspace } from '../domain/workspace'
 
-export type Space = { id: string; name: string; role: 'admin' | 'member' }
-export type Membership = { id: string; email: string; role: 'admin' | 'member' }
-export type Snapshot = { revision: number; workspace: Workspace }
-export type Scope = { space: Space; userId: string }
 export const projectUrl = (
   window.__MC_CONFIG?.url ??
   import.meta.env.VITE_SUPABASE_URL ??
@@ -48,18 +44,10 @@ export function db() {
   return client
 }
 
-export class CloudError extends Error {
-  constructor(
-    public readonly detail: string,
-    message: string
-  ) {
-    super(message)
-  }
-}
 export function humanError(error: {
   message?: string
   code?: string
-}): CloudError {
+}): WorkspaceError {
   const detail = error.message || ''
   const code = error.code || ''
   const messages: [RegExp, string][] = [
@@ -99,8 +87,15 @@ export function humanError(error: {
       'Não foi possível conectar ao servidor. Confira sua conexão.',
     ],
   ]
-  return new CloudError(
-    detail + ' ' + code,
+  const reason = detail + ' ' + code
+  const denied =
+    /MC_(FORBIDDEN|UNAUTHORIZED|AUTH_REQUIRED|ACCESS_DENIED|NOT_FOUND)|permission denied|jwt expired|PGRST30[123]|42501/i
+  return new WorkspaceError(
+    /MC_CONFLICT/.test(reason)
+      ? 'conflict'
+      : denied.test(reason)
+        ? 'denied'
+        : 'other',
     messages.find(([re]) => re.test(detail + ' ' + code))?.[1] ??
       'O servidor não concluiu a operação. Confira os dados e tente novamente.'
   )
@@ -113,103 +108,4 @@ export async function rpc<T>(
   const { data, error } = await db().rpc(name, args)
   if (error) throw humanError(error)
   return data as T
-}
-export function isDenied(error: unknown) {
-  return (
-    error instanceof CloudError &&
-    /MC_(FORBIDDEN|UNAUTHORIZED|AUTH_REQUIRED|ACCESS_DENIED|NOT_FOUND)|permission denied|jwt expired|PGRST30[123]|42501/i.test(
-      error.detail
-    )
-  )
-}
-export const isConflict = (error: unknown) =>
-  error instanceof CloudError && /MC_CONFLICT/.test(error.detail)
-export const fetchSnapshot = (space: Space) =>
-  rpc<Snapshot>('mc_workspace', { p_space: space.id })
-export function publicWorkspace(workspace: Workspace): Workspace {
-  return {
-    ...workspace,
-    songs: workspace.songs.map((song) => ({ ...song, notes: '' })),
-  }
-}
-export const saveSnapshot = (
-  space: Space,
-  revision: number,
-  workspace: Workspace
-) =>
-  rpc<Snapshot>('mc_save_workspace', {
-    p_space: space.id,
-    p_revision: revision,
-    p_workspace: publicWorkspace(workspace),
-  })
-
-export type Notes = Record<string, string>
-export const readNotes = (scope: Scope) =>
-  rpc<Notes>('mc_notes', { p_space: scope.space.id })
-export const writeNote = (
-  scope: Scope,
-  id: string,
-  note: string,
-  previous: string
-) =>
-  rpc<void>('mc_save_note', {
-    p_space: scope.space.id,
-    p_song: id,
-    p_note: note,
-    p_previous: previous,
-  })
-export const withNotes = (workspace: Workspace, notes: Notes): Workspace => ({
-  ...workspace,
-  songs: workspace.songs.map((song) => ({
-    ...song,
-    notes: Object.hasOwn(notes, song.id) ? notes[song.id] : '',
-  })),
-})
-
-let activeScope: Scope | undefined
-export function activateScores(scope?: Scope) {
-  activeScope = scope
-}
-export function currentScope() {
-  if (!activeScope)
-    throw new Error('Entre e selecione um espaço para acessar partituras.')
-  return activeScope
-}
-export function sameScope(scope: Scope) {
-  return (
-    activeScope?.space.id === scope.space.id &&
-    activeScope?.userId === scope.userId
-  )
-}
-export const scoreBucket = 'musiccenter-scores'
-export function scorePath(scope: Scope, id: string) {
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id))
-    throw new Error('Identificador de partitura inválido.')
-  return scope.space.id + '/' + id
-}
-export async function uploadScore(scope: Scope, id: string, data: ArrayBuffer) {
-  if (scope.space.role !== 'admin')
-    throw new Error('Apenas a administração pode enviar partituras.')
-  const { error } = await db()
-    .storage.from(scoreBucket)
-    .upload(
-      scorePath(scope, id),
-      new Blob([data], { type: 'application/pdf' }),
-      { contentType: 'application/pdf', upsert: false }
-    )
-  if (error) throw humanError(error)
-}
-export async function downloadScore(scope: Scope, id: string) {
-  const { data, error } = await db()
-    .storage.from(scoreBucket)
-    .download(scorePath(scope, id))
-  if (error) throw humanError(error)
-  return data.arrayBuffer()
-}
-export async function deleteScores(scope: Scope, ids: string[]) {
-  if (!ids.length) return
-  const { error } = await db()
-    .storage.from(scoreBucket)
-    .remove(ids.map((id) => scorePath(scope, id)))
-  if (error) throw humanError(error)
 }

@@ -3,13 +3,15 @@ import type {
   PDFDocumentProxy,
   RenderTask,
 } from 'pdfjs-dist/types/src/display/api'
-import { openScore, readScore } from '../../data/scores'
+export type OpenPdf = (id: string) => Promise<PDFDocumentProxy>
 
 export function PdfPage({
+  openPdf,
   fileId,
   page,
   onPages,
 }: {
+  openPdf: OpenPdf
   fileId: string
   page: number
   onPages: (total: number) => void
@@ -33,8 +35,7 @@ export function PdfPage({
     setDocument(undefined)
     setError('')
     onPages(0)
-    readScore(fileId)
-      .then(openScore)
+    openPdf(fileId)
       .then((pdf) => {
         if (dead) {
           void pdf.destroy()
@@ -54,7 +55,7 @@ export function PdfPage({
       dead = true
       if (loaded) void loaded.destroy()
     }
-  }, [fileId, onPages])
+  }, [fileId, onPages, openPdf])
   useEffect(() => {
     const container = host.current
     if (!document || width < 1 || !container) return

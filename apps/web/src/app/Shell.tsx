@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { App as NativeApp } from '@capacitor/app'
 import {
-  Capacitor,
-  SystemBars,
-  SystemBarsStyle,
-  type PluginListenerHandle,
-} from '@capacitor/core'
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import {
   BookOpen,
   CalendarDays,
@@ -22,32 +21,14 @@ import {
 import { Home, Stand } from '../features/dashboard/Home'
 import { PlanDetail, PlanEditor, Plans } from '../features/plans'
 import { Library, Reader } from '../features/repertoire'
-import { removeScores } from '../data/scores'
-import {
-  dateKey,
-  planSongs,
-  type Plan,
-  type Song,
-  type Workspace,
-} from '../domain/workspace'
-import { migrateLocal } from '../data/legacyWorkspace'
+import { dateKey, planSongs, type Plan, type Song } from '../domain/workspace'
 import { Manager } from '../features/account/Manager'
-import {
-  fetchSnapshot,
-  isConflict,
-  isDenied,
-  readNotes,
-  rpc,
-  sameScope,
-  saveSnapshot,
-  webUrl,
-  withNotes,
-  writeNote,
-  type Membership,
-  type Notes,
-  type Scope,
-  type Snapshot,
-} from '../data/supabase'
+import type { Scope, Snapshot, Notes } from '../domain/space'
+import type { WorkspaceServices } from '../application/workspaces'
+import type { DeviceNavigation } from '../application/deviceNavigation'
+import type { RepertoireServices } from '../features/repertoire/services'
+import { WorkspaceSession } from '../application/workspaceSession'
+import { isDenied } from '../application/errors'
 
 const tabs = [
   {
@@ -112,6 +93,10 @@ function SpaceBadge({ name, readOnly }: { name: string; readOnly: boolean }) {
   )
 }
 type ShellProps = {
+  services: WorkspaceServices
+  navigation: DeviceNavigation
+  repertoireFor: (scope: Scope) => RepertoireServices
+  webUrl: string
   initial: Snapshot
   scope: Scope
   personalNotes: Notes
@@ -122,6 +107,10 @@ type ShellProps = {
   onDenied: () => void
 }
 export function Shell({
+  services,
+  navigation,
+  repertoireFor,
+  webUrl,
   initial,
   scope,
   personalNotes,
@@ -132,13 +121,11 @@ export function Shell({
   onDenied,
 }: ShellProps) {
   const readOnly = scope.space.role === 'member'
-  const [data, setData] = useState(() =>
-    withNotes(initial.workspace, personalNotes)
+  const [session] = useState(
+    () => new WorkspaceSession(services, scope, initial, personalNotes)
   )
-  const cached = useRef(data)
-  const revision = useRef(initial.revision)
-  const notes = useRef(personalNotes)
-  const writes = useRef<Promise<void>>(Promise.resolve())
+  const repertoire = useMemo(() => repertoireFor(scope), [repertoireFor, scope])
+  const data = useSyncExternalStore(session.subscribe, session.current)
   const [connected, setConnected] = useState(true)
   const [notice, setNotice] = useState('')
   const [creating, setCreating] = useState(false)
@@ -166,55 +153,32 @@ export function Shell({
   useEffect(() => {
     window.scrollTo(0, 0)
     setNotice('')
-    if (Capacitor.isNativePlatform()) {
-      void SystemBars.setStyle({
-        style: isReader ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
-      }).catch(() => {})
-    }
-  }, [path, isReader])
+    navigation.setReaderAppearance(isReader)
+  }, [path, isReader, navigation])
   useEffect(() => {
-    if (Capacitor.getPlatform() !== 'android') return
-    let removed = false
-    let subscription: PluginListenerHandle | undefined
-    void NativeApp.addListener('backButton', () => {
+    return navigation.onBack(() => {
       const dialog = document.querySelector<HTMLDialogElement>('dialog[open]')
       if (dialog) {
         dialog.close()
         return
       }
       if (page === 'inicio' && !history.state?.musiccenter) {
-        void NativeApp.exitApp()
+        navigation.exit()
         return
       }
       back(routeBack)
-    }).then((handle) => {
-      if (removed) void handle.remove()
-      else subscription = handle
     })
-    return () => {
-      removed = true
-      void subscription?.remove()
-    }
-  }, [page, routeBack])
+  }, [page, routeBack, navigation])
 
-  function apply(snapshot: Snapshot) {
-    if (!sameScope(scope) || snapshot.revision < revision.current) return
-    revision.current = snapshot.revision
-    cached.current = withNotes(snapshot.workspace, notes.current)
-    setData(cached.current)
-  }
   useEffect(() => {
     let alive = true
     let checking = false
     async function refresh() {
-      if (!alive || checking || document.hidden || !sameScope(scope)) return
+      if (!alive || checking || document.hidden || !services.sameScope(scope))
+        return
       checking = true
       try {
-        const remote = await rpc<number>('mc_revision', {
-          p_space: scope.space.id,
-        })
-        if (alive && remote > revision.current)
-          apply(await fetchSnapshot(scope.space))
+        await session.refresh()
         if (alive) setConnected(true)
       } catch (error) {
         if (alive && isDenied(error)) onDenied()
@@ -237,24 +201,13 @@ export function Shell({
       window.removeEventListener('online', refresh)
       window.removeEventListener('offline', disconnect)
     }
-  }, [scope, onDenied])
+  }, [session, services, scope, onDenied])
   useEffect(() => {
     if (!isReader) return
     let active = true
     const load = async () => {
-      const before = notes.current
       try {
-        const remote = await readNotes(scope)
-        if (
-          active &&
-          sameScope(scope) &&
-          before === notes.current &&
-          JSON.stringify(remote) !== JSON.stringify(before)
-        ) {
-          notes.current = remote
-          cached.current = withNotes(cached.current, remote)
-          setData(cached.current)
-        }
+        await session.refreshNotes()
       } catch (error) {
         if (active && isDenied(error)) onDenied()
       }
@@ -265,40 +218,18 @@ export function Shell({
       active = false
       window.removeEventListener('focus', load)
     }
-  }, [isReader, scope, onDenied, path])
-  function commit(update: (current: Workspace) => Workspace) {
-    const fromRevision = revision.current
-    const task = writes.current.then(async () => {
-      if (readOnly || !sameScope(scope))
-        throw new Error('Apenas a administração deste espaço pode editar.')
-      if (fromRevision !== revision.current)
-        throw new Error(
-          'Os dados mudaram. Revise o conteúdo antes de salvar novamente.'
-        )
-      try {
-        const result = await saveSnapshot(
-          scope.space,
-          fromRevision,
-          update(cached.current)
-        )
-        apply(result)
-        setConnected(true)
-      } catch (error) {
-        if (isConflict(error)) apply(await fetchSnapshot(scope.space))
-        if (isDenied(error)) onDenied()
-        throw error
-      }
-    })
-    writes.current = task.catch(() => {})
-    return task
+  }, [isReader, session, onDenied, path])
+  async function trackWrite(write: Promise<void>) {
+    try {
+      await write
+      setConnected(true)
+    } catch (error) {
+      if (isDenied(error)) onDenied()
+      throw error
+    }
   }
   function savePlan(p: Plan) {
-    return commit((current) => ({
-      ...current,
-      plans: current.plans.some((x) => x.id === p.id)
-        ? current.plans.map((x) => (x.id === p.id ? p : x))
-        : [...current.plans, p],
-    }))
+    return trackWrite(session.savePlan(p))
       .then(() => true)
       .catch((error) => {
         setNotice(
@@ -308,41 +239,19 @@ export function Shell({
       })
   }
   function saveSong(s: Song) {
-    return commit((current) => ({
-      ...current,
-      songs: current.songs.some((x) => x.id === s.id)
-        ? current.songs.map((x) => (x.id === s.id ? s : x))
-        : [...current.songs, s],
-    }))
+    return trackWrite(session.saveSong(s))
   }
   async function savePersonalNote(song: Song, previous: string) {
-    if (!sameScope(scope)) throw new Error('A sessão mudou.')
     try {
-      await writeNote(scope, song.id, song.notes, previous)
+      await session.saveNote(song, previous)
     } catch (error) {
-      if (isConflict(error) && sameScope(scope)) {
-        notes.current = await readNotes(scope)
-        cached.current = withNotes(cached.current, notes.current)
-        setData(cached.current)
-        throw new Error(
-          'Sua anotação mudou em outra sessão. Copie seu rascunho e reabra a anotação para revisar a versão atual.'
-        )
-      }
       if (isDenied(error)) onDenied()
       throw error
     }
-    const next = { ...notes.current, [song.id]: song.notes }
-    if (!sameScope(scope)) return
-    notes.current = next
-    cached.current = withNotes(cached.current, next)
-    setData(cached.current)
   }
   async function deletePlan(p: Plan) {
     try {
-      await commit((current) => ({
-        ...current,
-        plans: current.plans.filter((x) => x.id !== p.id),
-      }))
+      await trackWrite(session.deletePlan(p.id))
     } catch {
       throw new Error(
         'Não foi possível excluir o plano. Confira a conexão e atualize os dados.'
@@ -351,24 +260,7 @@ export function Shell({
     navigate('/planos', true)
   }
   async function deleteSong(s: Song) {
-    let removed: Song | undefined
-    await commit((current) => {
-      const plan = current.plans.find((p) =>
-        p.items.some((item) => item.songId === s.id)
-      )
-      if (plan)
-        throw new Error(
-          'Remova a música do roteiro “' + plan.title + '” antes de excluí-la.'
-        )
-      removed = current.songs.find((x) => x.id === s.id)
-      return { ...current, songs: current.songs.filter((x) => x.id !== s.id) }
-    })
-    if (
-      removed?.pdfId &&
-      !cached.current.songs.some((x) => x.pdfId === removed?.pdfId)
-    ) {
-      await removeScores([removed.pdfId]).catch(() => {})
-    }
+    await trackWrite(session.deleteSong(s.id))
   }
   const openPlan = (p: Plan) => navigate('/planos/' + p.id)
   const openSet = (p: Plan, i: number) => navigate('/palco/' + p.id + '/' + i)
@@ -377,20 +269,8 @@ export function Shell({
     if (!file) return
     setBusy('Importando plano…')
     try {
-      const { importPlan } = await import('../features/plans/transfer')
-      const imported = await importPlan(file)
-      try {
-        await commit((current) => ({
-          ...current,
-          plans: [...current.plans, imported.plan],
-          songs: [...current.songs, ...imported.songs],
-        }))
-      } catch (error) {
-        await removeScores(
-          imported.songs.flatMap((s) => (s.pdfId ? [s.pdfId] : []))
-        ).catch(() => {})
-        throw error
-      }
+      const imported = await repertoire.importPlan(file)
+      await trackWrite(session.addImportedPlan(imported.plan, imported.songs))
       openPlan(imported.plan)
     } catch (error) {
       setNotice(
@@ -406,8 +286,7 @@ export function Shell({
     if (!plan) return
     setBusy('Preparando arquivo…')
     try {
-      const { sharePlan } = await import('../features/plans/transfer')
-      await sharePlan(plan, data.songs)
+      await repertoire.sharePlan(plan, data.songs)
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -445,6 +324,7 @@ export function Shell({
       <>
         {messages}
         <Reader
+          openPdf={repertoire.openPdf}
           key={path}
           songs={readerSongs}
           initialIndex={Math.max(
@@ -512,21 +392,10 @@ export function Shell({
               role={scope.space.role}
               email={email}
               webUrl={webUrl}
-              onInvite={() =>
-                rpc<string>('mc_invite', { p_space: scope.space.id })
-              }
-              onRevoke={() =>
-                rpc<void>('mc_revoke_invites', { p_space: scope.space.id })
-              }
-              onMembers={() =>
-                rpc<Membership[]>('mc_members', { p_space: scope.space.id })
-              }
-              onRemoveMember={(id) =>
-                rpc<void>('mc_remove_member', {
-                  p_space: scope.space.id,
-                  p_user: id,
-                })
-              }
+              onInvite={() => services.invite(scope.space)}
+              onRevoke={() => services.revokeInvites(scope.space)}
+              onMembers={() => services.members(scope.space)}
+              onRemoveMember={(id) => services.removeMember(scope.space, id)}
               onLeave={onLeave}
               onSwitch={onSwitch}
               onMigrate={
@@ -535,9 +404,9 @@ export function Shell({
                 !data.plans.length &&
                 !data.songs.length
                   ? async () => {
-                      const next = await migrateLocal(scope)
-                      notes.current = await readNotes(scope)
-                      apply(next)
+                      const next = await services.migrateLocal(scope)
+                      await session.refreshNotes()
+                      session.apply(next)
                     }
                   : undefined
               }
@@ -566,6 +435,7 @@ export function Shell({
             )
           ) : page === 'repertorio' ? (
             <Library
+              scores={repertoire.scores}
               readOnly={readOnly}
               songs={data.songs}
               onDelete={deleteSong}

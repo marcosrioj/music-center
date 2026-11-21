@@ -1,13 +1,12 @@
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 import {
-  currentScope,
   downloadScore,
   uploadScore,
   deleteScores,
-  sameScope,
-  type Scope,
-} from './supabase'
+} from './scoreStorage'
+import type { Scope } from '../domain/space'
+import type { ScoreFiles } from '../application/scoreFiles'
 
 const storeName = 'scores'
 let connection: Promise<IDBDatabase> | undefined
@@ -69,27 +68,21 @@ export async function openScore(data: ArrayBuffer) {
   }
 }
 
-export async function storeScore(
-  file: File,
-  id: string,
-  scope: Scope = currentScope()
-) {
-  const data = await file.arrayBuffer()
-  // The PDF worker takes ownership of its buffer. Retain the original for IndexedDB.
-  const document = await openScore(data.slice(0))
-  try {
-    if (document.numPages < 1) throw new Error('PDF sem páginas')
-  } finally {
-    await document.destroy()
+export function scoresFor(scope: Scope, isActive: () => boolean): ScoreFiles {
+  return {
+    read: (id) => downloadScore(scope, id),
+    remove: (ids) => deleteScores(scope, ids),
+    async store(file, id) {
+      const data = await file.arrayBuffer()
+      // PDF.js takes ownership of its buffer. Upload the original unchanged.
+      const document = await openScore(data.slice(0))
+      try {
+        if (document.numPages < 1) throw new Error('PDF sem páginas')
+      } finally {
+        await document.destroy()
+      }
+      if (!isActive()) throw new Error('O espaço mudou durante o envio.')
+      await uploadScore(scope, id, data)
+    },
   }
-  if (!sameScope(scope)) throw new Error('O espaço mudou durante o envio.')
-  await uploadScore(scope, id, data)
-}
-
-export function readScore(id: string, scope: Scope = currentScope()) {
-  return downloadScore(scope, id)
-}
-
-export function removeScores(ids: string[], scope: Scope = currentScope()) {
-  return deleteScores(scope, ids)
 }

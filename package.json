@@ -21,6 +21,8 @@
     "supabase": "npm run supabase --workspace @musiccenter/backend --",
     "test:online": "npm run test:online --workspace @musiccenter/backend",
     "package:web": "npm run build && python3 scripts/package-web.py",
-    "package:ios": "npm run sync && python3 scripts/package-ios.py"
+    "package:ios": "npm run sync && python3 scripts/package-ios.py",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "test": "npm run check:architecture && npm test --workspace @musiccenter/web && npm test --workspace @musiccenter/backend"
   }
 }

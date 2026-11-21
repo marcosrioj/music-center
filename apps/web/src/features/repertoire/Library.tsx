@@ -14,7 +14,10 @@ import {
   X,
 } from 'lucide-react'
 import type { Song } from '../../domain/workspace'
-import { removeScores, storeScore } from '../../data/scores'
+import {
+  saveSongWithScore,
+  type ScoreFiles,
+} from '../../application/scoreFiles'
 
 function uid() {
   return typeof crypto.randomUUID === 'function'
@@ -42,6 +45,7 @@ const normalize = (text: string) =>
     .toLocaleLowerCase('pt-BR')
 
 type LibraryProps = {
+  scores: ScoreFiles
   readOnly?: boolean
   songs: Song[]
   onDelete: (song: Song) => Promise<void>
@@ -51,6 +55,7 @@ type LibraryProps = {
 }
 
 function SongEditor({
+  scores,
   source,
   isNew,
   retainPreviousPdf,
@@ -58,6 +63,7 @@ function SongEditor({
   onSave,
   onDelete,
 }: {
+  scores: ScoreFiles
   source: Song
   isNew: boolean
   retainPreviousPdf: boolean
@@ -107,42 +113,26 @@ function SongEditor({
     setError('')
     setSaving(true)
     busy.current = true
-    let validatingPdf = !!file
-    let newScoreId: string | undefined
     try {
-      const song = {
-        ...draft,
-        title: draft.title.trim(),
-        artist: draft.artist.trim(),
-        bpm: Number(tempoText),
-      }
-      if (file) {
-        const id = uid()
-        await storeScore(file, id)
-        newScoreId = id
-        song.pdfId = id
-        song.pdfName = file.name
-      }
-      validatingPdf = false
-      await onSave(song)
-      newScoreId = undefined
-      if (source.pdfId && source.pdfId !== song.pdfId && !retainPreviousPdf) {
-        void removeScores([source.pdfId]).catch(() => {})
-      }
+      await saveSongWithScore(scores, {
+        original: source,
+        draft: {
+          ...draft,
+          title: draft.title.trim(),
+          artist: draft.artist.trim(),
+          bpm: Number(tempoText),
+        },
+        file,
+        retainPreviousPdf,
+        newId: uid,
+        persist: onSave,
+      })
       onDismiss()
-    } catch (reason) {
-      // The song write failed, so this attachment has no durable reference.
-      if (newScoreId) await removeScores([newScoreId]).catch(() => {})
-      const password =
-        reason instanceof Error && reason.name === 'PasswordException'
+    } catch (error) {
       setError(
-        password
-          ? 'Importe uma cópia do PDF que abra sem senha.'
-          : validatingPdf
-            ? 'Falha ao importar o PDF. Verifique o arquivo e tente novamente.'
-            : reason instanceof Error
-              ? reason.message
-              : 'Não foi possível salvar a música. Tente novamente.'
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível salvar a música. Tente novamente.'
       )
     } finally {
       busy.current = false
@@ -394,6 +384,7 @@ function SongEditor({
 }
 
 export function Library({
+  scores,
   songs,
   onSave,
   onOpen,
@@ -558,6 +549,7 @@ export function Library({
       </div>
       {!readOnly && editing && (
         <SongEditor
+          scores={scores}
           onDelete={(song) => {
             assertEditable(editing.song, editing.isNew)
             return onDelete(song)

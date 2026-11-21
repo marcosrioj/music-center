@@ -27,7 +27,7 @@ Para trabalhar apenas no painel, `npm ci --workspace @musiccenter/web` instala a
 | Testes do backend | [backend/tests](backend/tests) | Testes de integração em uma instância local. Os [testes SQL](backend/supabase/tests) ficam junto das migrações. |
 | Empacotamento | [scripts](scripts) | Geração dos ZIPs web e iOS. Os pacotes prontos ficam em [entrega](entrega). |
 
-Em `apps/web/src/`, **app/** inicializa a sessão, monta a navegação e abre o espaço ativo. **features/** reúne as telas de conta, painel, planos e repertório. **domain/** define os tipos e regras de música, plano e escala. **data/** concentra acesso ao Supabase, PDFs privados e migração de dados antigos. O Android e o iOS recebem a interface compilada por meio do Capacitor.
+Em `apps/web/src/`, **domain/** define as regras de música e planejamento, e **application/** coordena os casos de uso. **data/** implementa o acesso ao Supabase e aos arquivos, e **platform/** integra os recursos do navegador e dos aparelhos. As telas em **features/** recebem esses serviços pela composição em **app/**. Web, Android e iOS usam a mesma implementação. [Arquitetura e fluxo de uma edição](docs/arquitetura.md)
 
 Os pacotes originais usados como referência ficam em `references/apks/` na máquina de trabalho. O levantamento funcional está em [docs/recon.md](docs/recon.md).
 
@@ -42,6 +42,7 @@ Os pacotes originais usados como referência ficam em `references/apks/` na máq
 | `npm run apk` | Gera o APK de teste em `entrega/MusicCenter-Android.apk`. |
 | `npm run package:web` ou `npm run package:ios` | Gera o ZIP correspondente em `entrega/`. Requer Python 3. |
 | `npm run supabase -- status` | Executa a CLI Supabase no diretório do backend. |
+| `npm test` | Verifica as fronteiras arquiteturais e executa os testes unitários dos clientes e do backend. |
 | `npm run test:online` | Exercita contas, permissões e sincronização no Supabase local com as credenciais de teste. |
 
 ## Operação

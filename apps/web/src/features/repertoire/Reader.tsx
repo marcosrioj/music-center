@@ -13,10 +13,12 @@ import {
 } from 'lucide-react'
 import type { Song } from '../../domain/workspace'
 import { Metronome } from './Metronome'
-import { SongChart, transpose } from './music'
-import { PdfPage } from './PdfPage'
+import { SongChart } from './music'
+import { prefersFlats, transpose } from '../../domain/transposition'
+import { PdfPage, type OpenPdf } from './PdfPage'
 
 type ReaderProps = {
+  openPdf: OpenPdf
   songs: Song[]
   initialIndex: number
   onClose: () => void
@@ -133,6 +135,7 @@ function Notes({
 }
 
 function Stage({
+  openPdf,
   song,
   index,
   total,
@@ -141,6 +144,7 @@ function Stage({
   onSong,
   onSave,
 }: {
+  openPdf: OpenPdf
   song: Song
   index: number
   total: number
@@ -158,7 +162,7 @@ function Stage({
   const [pages, setPages] = useState(0)
   const [notes, setNotes] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
-  const preferFlats = /b|♭|^F(?:m)?$/.test(song.key)
+  const preferFlats = prefersFlats(song.key)
   const currentKey = transpose(song.key, steps, preferFlats)
   useEffect(() => {
     setPage(1)
@@ -310,7 +314,12 @@ function Stage({
           ) : (
             song.pdfId && (
               <div>
-                <PdfPage fileId={song.pdfId} page={page} onPages={setPages} />
+                <PdfPage
+                  openPdf={openPdf}
+                  fileId={song.pdfId}
+                  page={page}
+                  onPages={setPages}
+                />
                 {pages > 0 && (
                   <nav
                     className="rep-pdf-nav"
@@ -376,6 +385,7 @@ function Stage({
 }
 
 export function Reader({
+  openPdf,
   songs,
   initialIndex,
   onClose,
@@ -399,6 +409,7 @@ export function Reader({
     )
   return (
     <Stage
+      openPdf={openPdf}
       key={index + '-' + song.id}
       song={song}
       index={index}

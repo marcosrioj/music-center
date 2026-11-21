@@ -9,7 +9,7 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react'
-import type { Space } from '../../data/supabase'
+import type { Space } from '../../domain/space'
 import { Brand, Feedback } from './AccountUI'
 import { useAction } from './useAction'
 
