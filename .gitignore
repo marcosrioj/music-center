@@ -13,3 +13,4 @@ dist/
 /backend/supabase/.temp/
 /backend/supabase/.branches/
 /.site-publish/
+supabase/.temp
