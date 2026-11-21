@@ -10,7 +10,7 @@ A interface compartilhada pelo painel web e pelos aplicativos usa o SDK oficial 
 | Notas pessoais | Somente o titular logado e integrante do espaço | Tabela privada, gravada com comparação de versão do texto |
 | Exclusão de conta | O próprio titular | Edge Function verifica o token no Auth, bloqueia novos envios, limpa os PDFs dos espaços administrados e exclui a identidade |
 
-As tabelas ficam em um esquema interno com RLS. As operações expostas verificam a identidade e o papel do usuário. A importação do acervo local ocorre por opção do administrador em um espaço vazio. O aplicativo publica a revisão nova após a confirmação pelo servidor. PDFs enviados por uma operação que falhou passam por limpeza. Um PDF já referenciado é protegido pelas políticas da equipe.
+O schema `public` contém as seis tabelas do MusicCenter. Todas usam RLS e os aplicativos acessam os dados pelas RPCs. No Table Editor, abra `public.spaces` para consultar o campo `workspace`, que contém os planos e as músicas. As funções auxiliares ficam em `mc_private`. As operações expostas verificam a identidade e o papel do usuário. A importação do acervo local ocorre por opção do administrador em um espaço vazio. O aplicativo publica a revisão nova após a confirmação pelo servidor. PDFs enviados por uma operação que falhou passam por limpeza. Um PDF já referenciado é protegido pelas políticas da equipe.
 
 A chave de serviço é necessária na Edge Function e nos testes de integração isolados. O frontend usa a chave pública. O Supabase aplica seus limites de Auth. A migração limita o tamanho do conteúdo e a quantidade de integrantes, convites e espaços. A política de backup e a entrega de e-mails pertencem ao projeto de hospedagem escolhido.
 

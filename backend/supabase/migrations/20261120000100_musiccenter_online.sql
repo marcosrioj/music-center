@@ -1,10 +1,9 @@
--- The Data API exposes only the public RPCs. Workspace snapshots and memberships
--- live outside the exposed schemas, with RLS and no direct client table grants.
+-- Tables are created in public; internal helpers stay outside the Data API.
 create schema mc_private;
 revoke all on schema mc_private from public, anon, authenticated;
 grant usage on schema mc_private to authenticated;
 
-create table mc_private.spaces (
+create table public.spaces (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
   name text not null check (char_length(btrim(name)) between 1 and 120),
@@ -13,42 +12,44 @@ create table mc_private.spaces (
   deleting boolean not null default false,
   created_at timestamptz not null default now()
 );
-create index spaces_by_owner on mc_private.spaces(owner_id, created_at);
-create table mc_private.members (
-  space_id uuid not null references mc_private.spaces(id) on delete cascade,
+create index spaces_by_owner on public.spaces(owner_id, created_at);
+create table public.members (
+  space_id uuid not null references public.spaces(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   joined_at timestamptz not null default now(),
   primary key (space_id,user_id)
 );
-create index members_by_user on mc_private.members(user_id,space_id);
-create table mc_private.invites (
+create index members_by_user on public.members(user_id,space_id);
+create table public.invites (
   digest bytea primary key,
   sequence_number bigint generated always as identity,
-  space_id uuid not null references mc_private.spaces(id) on delete cascade,
+  space_id uuid not null references public.spaces(id) on delete cascade,
   created_at timestamptz not null default now()
 );
-create index invites_by_space on mc_private.invites(space_id);
-create table mc_private.rejoin_cutoffs (
-  space_id uuid not null references mc_private.spaces(id) on delete cascade,
+create index invites_by_space on public.invites(space_id);
+create table public.rejoin_cutoffs (
+  space_id uuid not null references public.spaces(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   last_invitation bigint not null,
   primary key(space_id,user_id)
 );
-create index rejoin_cutoffs_by_user on mc_private.rejoin_cutoffs(user_id);
-create table mc_private.account_deletions (
+create index rejoin_cutoffs_by_user on public.rejoin_cutoffs(user_id);
+create table public.account_deletions (
   user_id uuid primary key references auth.users(id) on delete cascade
 );
-alter table mc_private.spaces enable row level security;
-alter table mc_private.members enable row level security;
-alter table mc_private.invites enable row level security;
-alter table mc_private.rejoin_cutoffs enable row level security;
-alter table mc_private.account_deletions enable row level security;
-revoke all on all tables in schema mc_private from public, anon, authenticated;
+alter table public.spaces enable row level security;
+alter table public.members enable row level security;
+alter table public.invites enable row level security;
+alter table public.rejoin_cutoffs enable row level security;
+alter table public.account_deletions enable row level security;
+revoke all on table public.spaces, public.members, public.invites,
+  public.rejoin_cutoffs, public.account_deletions from public, anon, authenticated;
+revoke all on sequence public.invites_sequence_number_seq from public, anon, authenticated;
 
 create function mc_private.actor() returns uuid language sql stable
 set search_path = '' as $$
   select auth.uid() where coalesce(auth.jwt()->>'is_anonymous','false') <> 'true'
-    and not exists(select 1 from mc_private.account_deletions where user_id = auth.uid());
+    and not exists(select 1 from public.account_deletions where user_id = auth.uid());
 $$;
 
 create function mc_private.valid_id(val jsonb) returns boolean language sql immutable
@@ -153,8 +154,8 @@ begin
   -- Serialize the per-account quota and the beginning of account deletion.
   perform 1 from auth.users where id = actor for update;
   if not found or mc_private.actor() is null then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
-  if (select count(*) from mc_private.spaces where owner_id = actor) >= 32 then raise exception 'MC_SPACE_LIMIT'; end if;
-  insert into mc_private.spaces(owner_id,name) values(actor,btrim(p_name)) returning id into new_id;
+  if (select count(*) from public.spaces where owner_id = actor) >= 32 then raise exception 'MC_SPACE_LIMIT'; end if;
+  insert into public.spaces(owner_id,name) values(actor,btrim(p_name)) returning id into new_id;
   return jsonb_build_object('id',new_id,'name',btrim(p_name),'role','admin');
 end;
 $$;
@@ -163,8 +164,8 @@ create function public.mc_list_spaces() returns jsonb language sql stable securi
 set search_path = '' as $$
   select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'name',s.name,'role',
     case when s.owner_id = mc_private.actor() then 'admin' else 'member' end) order by s.created_at,s.id),'[]')
-  from mc_private.spaces s where not s.deleting and
-    (s.owner_id = mc_private.actor() or exists(select 1 from mc_private.members m
+  from public.spaces s where not s.deleting and
+    (s.owner_id = mc_private.actor() or exists(select 1 from public.members m
       where m.space_id = s.id and m.user_id = mc_private.actor()));
 $$;
 
@@ -173,8 +174,8 @@ language plpgsql stable security definer set search_path = '' as $$
 declare result jsonb;
 begin
   select jsonb_build_object('revision',s.revision,'workspace',s.workspace) into result
-  from mc_private.spaces s where id = p_space and not deleting and (s.owner_id = mc_private.actor()
-    or exists(select 1 from mc_private.members m where m.space_id = s.id and m.user_id = mc_private.actor()));
+  from public.spaces s where id = p_space and not deleting and (s.owner_id = mc_private.actor()
+    or exists(select 1 from public.members m where m.space_id = s.id and m.user_id = mc_private.actor()));
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   return result;
 end;
@@ -184,7 +185,7 @@ create function public.mc_save_workspace(p_space uuid,p_revision bigint,p_worksp
 language plpgsql security definer set search_path = '' as $$
 declare current_revision bigint;
 begin
-  select revision into current_revision from mc_private.spaces
+  select revision into current_revision from public.spaces
   where id = p_space and owner_id = mc_private.actor() and not deleting for update;
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   if current_revision is distinct from p_revision then raise exception 'MC_CONFLICT' using errcode='PT409'; end if;
@@ -193,7 +194,7 @@ begin
     and not exists(select 1 from storage.objects obj where obj.bucket_id = 'musiccenter-scores'
       and obj.name = p_space::text || '/' || (song->>'pdfId')))
   then raise exception 'MC_MISSING_PDF'; end if;
-  update mc_private.spaces set revision = current_revision + 1, workspace = p_workspace where id = p_space;
+  update public.spaces set revision = current_revision + 1, workspace = p_workspace where id = p_space;
   return jsonb_build_object('revision',current_revision + 1,'workspace',p_workspace);
 end;
 $$;
@@ -202,8 +203,8 @@ create function public.mc_revision(p_space uuid) returns bigint
 language plpgsql stable security definer set search_path = '' as $$
 declare current_revision bigint;
 begin
-  select s.revision into current_revision from mc_private.spaces s where s.id = p_space and not s.deleting
-    and (s.owner_id = mc_private.actor() or exists(select 1 from mc_private.members m
+  select s.revision into current_revision from public.spaces s where s.id = p_space and not s.deleting
+    and (s.owner_id = mc_private.actor() or exists(select 1 from public.members m
       where m.space_id = s.id and m.user_id = mc_private.actor()));
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   return current_revision;
@@ -214,12 +215,12 @@ create function public.mc_invite(p_space uuid) returns text
 language plpgsql security definer set search_path = '' as $$
 declare token text;
 begin
-  perform 1 from mc_private.spaces where id = p_space and owner_id = mc_private.actor() and not deleting for update;
+  perform 1 from public.spaces where id = p_space and owner_id = mc_private.actor() and not deleting for update;
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
-  if (select count(*) from mc_private.invites where space_id = p_space) >= 100 then raise exception 'MC_INVITE_LIMIT'; end if;
+  if (select count(*) from public.invites where space_id = p_space) >= 100 then raise exception 'MC_INVITE_LIMIT'; end if;
   -- Two independent CSPRNG-backed v4 UUIDs carry 244 random bits.
   token := encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text,'UTF8')),'hex');
-  insert into mc_private.invites(digest,space_id) values(sha256(convert_to(token,'UTF8')),p_space);
+  insert into public.invites(digest,space_id) values(sha256(convert_to(token,'UTF8')),p_space);
   return token;
 end;
 $$;
@@ -227,32 +228,32 @@ $$;
 create function public.mc_revoke_invites(p_space uuid) returns void
 language plpgsql security definer set search_path = '' as $$
 begin
-  perform 1 from mc_private.spaces where id = p_space and owner_id = mc_private.actor() and not deleting for update;
+  perform 1 from public.spaces where id = p_space and owner_id = mc_private.actor() and not deleting for update;
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
-  delete from mc_private.invites where space_id = p_space;
+  delete from public.invites where space_id = p_space;
 end;
 $$;
 
 create function public.mc_join_space(p_token text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare actor uuid := mc_private.actor(); code bytea; invite_order bigint; s mc_private.spaces%rowtype;
+declare actor uuid := mc_private.actor(); code bytea; invite_order bigint; s public.spaces%rowtype;
 begin
   if actor is null then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   if p_token is null or p_token !~ '^[a-f0-9]{64}$' then raise exception 'MC_INVALID_INVITE'; end if;
   code := sha256(convert_to(p_token,'UTF8'));
   -- Lock in the same order as invitations/revocation. Recheck the invitation after
   -- acquiring the lock in case a concurrent revoke committed while we waited.
-  select sp.* into s from mc_private.spaces sp join mc_private.invites i on sp.id=i.space_id
+  select sp.* into s from public.spaces sp join public.invites i on sp.id=i.space_id
     where i.digest=code and not sp.deleting for update of sp;
   if not found then raise exception 'MC_INVALID_INVITE'; end if;
-  select sequence_number into invite_order from mc_private.invites where digest=code;
-  if not found or exists(select 1 from mc_private.rejoin_cutoffs
+  select sequence_number into invite_order from public.invites where digest=code;
+  if not found or exists(select 1 from public.rejoin_cutoffs
     where space_id=s.id and user_id=actor and last_invitation >= invite_order)
   then raise exception 'MC_INVALID_INVITE'; end if;
-  if actor <> s.owner_id and not exists(select 1 from mc_private.members where space_id=s.id and user_id=actor) then
-    if (select count(*) from mc_private.members where space_id=s.id) >= 1000 then raise exception 'MC_MEMBER_LIMIT'; end if;
-    insert into mc_private.members(space_id,user_id) values(s.id,actor);
-    delete from mc_private.rejoin_cutoffs where space_id=s.id and user_id=actor;
+  if actor <> s.owner_id and not exists(select 1 from public.members where space_id=s.id and user_id=actor) then
+    if (select count(*) from public.members where space_id=s.id) >= 1000 then raise exception 'MC_MEMBER_LIMIT'; end if;
+    insert into public.members(space_id,user_id) values(s.id,actor);
+    delete from public.rejoin_cutoffs where space_id=s.id and user_id=actor;
   end if;
   return jsonb_build_object('id',s.id,'name',s.name,'role',case when actor=s.owner_id then 'admin' else 'member' end);
 end;
@@ -262,11 +263,11 @@ create function public.mc_members(p_space uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare owner uuid;
 begin
-  select owner_id into owner from mc_private.spaces where id=p_space and owner_id=mc_private.actor() and not deleting;
+  select owner_id into owner from public.spaces where id=p_space and owner_id=mc_private.actor() and not deleting;
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   return (select jsonb_agg(jsonb_build_object('id',u.id,'email',u.email,'role',
     case when u.id=owner then 'admin' else 'member' end) order by (u.id=owner) desc,u.email,u.id)
-    from auth.users u where u.id=owner or u.id in (select user_id from mc_private.members where space_id=p_space));
+    from auth.users u where u.id=owner or u.id in (select user_id from public.members where space_id=p_space));
 end;
 $$;
 
@@ -274,15 +275,15 @@ create function public.mc_remove_member(p_space uuid,p_user uuid) returns void
 language plpgsql security definer set search_path = '' as $$
 declare owner uuid;
 begin
-  select owner_id into owner from mc_private.spaces where id=p_space and owner_id=mc_private.actor() and not deleting for update;
+  select owner_id into owner from public.spaces where id=p_space and owner_id=mc_private.actor() and not deleting for update;
   if not found then raise exception 'MC_FORBIDDEN' using errcode='42501'; end if;
   if p_user=owner then raise exception 'MC_OWNER'; end if;
-  delete from mc_private.members where space_id=p_space and user_id=p_user;
+  delete from public.members where space_id=p_space and user_id=p_user;
   if found then
     -- Existing links remain usable by the rest of the group. This user needs
     -- a link generated after removal to regain access.
-    insert into mc_private.rejoin_cutoffs(space_id,user_id,last_invitation)
-    select p_space,p_user,max(sequence_number) from mc_private.invites
+    insert into public.rejoin_cutoffs(space_id,user_id,last_invitation)
+    select p_space,p_user,max(sequence_number) from public.invites
     where space_id=p_space having count(*) > 0
     on conflict(space_id,user_id) do update set last_invitation=excluded.last_invitation;
   end if;
@@ -294,9 +295,9 @@ language plpgsql security definer set search_path = '' as $$
 begin
   perform 1 from auth.users where id=p_user for update;
   if not found then raise exception 'MC_UNKNOWN_ACCOUNT'; end if;
-  insert into mc_private.account_deletions(user_id) values(p_user) on conflict do nothing;
-  update mc_private.spaces set deleting=true where owner_id=p_user;
-  return array(select id from mc_private.spaces where owner_id=p_user order by id);
+  insert into public.account_deletions(user_id) values(p_user) on conflict do nothing;
+  update public.spaces set deleting=true where owner_id=p_user;
+  return array(select id from public.spaces where owner_id=p_user order by id);
 end;
 $$;
 
@@ -308,20 +309,20 @@ values ('musiccenter-scores','musiccenter-scores',false,52428800,array['applicat
 -- and suspending a space for account deletion.
 create function mc_private.score_access(object_name text, action text) returns boolean
 language plpgsql volatile security definer set search_path = '' as $$
-declare space_uuid uuid; pdf_id text; s mc_private.spaces%rowtype; actor uuid := mc_private.actor();
+declare space_uuid uuid; pdf_id text; s public.spaces%rowtype; actor uuid := mc_private.actor();
 begin
   if actor is null or object_name !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[A-Za-z0-9_-]{1,128}$'
   then return false; end if;
   space_uuid := split_part(object_name,'/',1)::uuid;
   pdf_id := split_part(object_name,'/',2);
   if action = 'read' then
-    select * into s from mc_private.spaces where id=space_uuid and not deleting;
+    select * into s from public.spaces where id=space_uuid and not deleting;
     if not found then return false; end if;
     if s.owner_id=actor then return true; end if;
-    return exists(select 1 from mc_private.members where space_id=s.id and user_id=actor)
+    return exists(select 1 from public.members where space_id=s.id and user_id=actor)
       and (s.workspace->'songs') @> jsonb_build_array(jsonb_build_object('pdfId',pdf_id));
   end if;
-  select * into s from mc_private.spaces where id=space_uuid and owner_id=actor and not deleting for update;
+  select * into s from public.spaces where id=space_uuid and owner_id=actor and not deleting for update;
   if not found then return false; end if;
   if action = 'add' then
     return (select count(*) from storage.objects where bucket_id='musiccenter-scores'

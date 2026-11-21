@@ -75,11 +75,11 @@ begin
   select * into f from fixture;
   perform pg_temp.login(f.other_id);
   perform pg_temp.require(public.mc_list_spaces()='[]','space enumeration isolated');
-  perform pg_temp.require(not has_table_privilege('authenticated','mc_private.spaces','SELECT')
-    and not has_table_privilege('authenticated','mc_private.invites','SELECT')
-    and not has_table_privilege('authenticated','mc_private.members','INSERT')
-    and not has_table_privilege('anon','mc_private.spaces','SELECT'),'no direct table grants');
-  perform pg_temp.must_fail('select workspace from mc_private.spaces','42501');
+  perform pg_temp.require(not has_table_privilege('authenticated','public.spaces','SELECT')
+    and not has_table_privilege('authenticated','public.invites','SELECT')
+    and not has_table_privilege('authenticated','public.members','INSERT')
+    and not has_table_privilege('anon','public.spaces','SELECT'),'no direct table grants');
+  perform pg_temp.must_fail('select workspace from public.spaces','42501');
   perform pg_temp.must_fail(format('select public.mc_workspace(%L)',f.space_id),'MC_FORBIDDEN');
   perform pg_temp.must_fail(format('select public.mc_revision(%L)',f.space_id),'MC_FORBIDDEN');
   perform pg_temp.require(not exists(select 1 from storage.objects where name=f.space_id || '/score1'),'unrelated account PDF isolation');
